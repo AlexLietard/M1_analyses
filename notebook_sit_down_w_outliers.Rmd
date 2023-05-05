@@ -1,6 +1,6 @@
 ---
 title: "Script M1 TER"
-author: "Alexandre"
+author: "Alexandre Lietard"
 date: "2023-04-06"
 output: html_document
 ---
