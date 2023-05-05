@@ -1,0 +1,496 @@
+---
+title: "Script M1 TER"
+author: "Alexandre"
+date: "2023-04-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, results = 'hide')
+```
+
+```{r, warning=FALSE, message=FALSE}
+#### Importation des bibliothèques
+
+library(car)
+
+library(ggeffects)
+library(rms)
+library(multcomp)
+library(emmeans)
+
+# Packages pour les LMM
+library(lmerTest)
+
+# Evaluation du modèle
+library(performance)
+library(sjPlot)
+
+# Pré-analyse 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+
+# Distance de cook/outliers
+library(predictmeans)
+library(Routliers)
+
+
+# Variables descriptives
+library(psych)
+
+# Condition d'applications
+library(gvlma)
+```
+
+
+# Pré-analyse
+
+## Vérification données aberrantes
+
+```{r}
+df_aberrant <- read.csv("../data/data_assis_categorisation.csv", sep = ";")
+```
+
+```{r}
+graph <- ggplot(data = df_aberrant, aes(x = biais))+
+  geom_histogram()
+graph
+```
+
+```{r}
+b = outliers_mad(x = df_aberrant$biais, threshold = 2.5)
+```
+
+```{r}
+df_aberrant_select <- df_aberrant %>% filter(biais>b$UL_CI_MAD | biais< b$LL_CI_MAD)
+```
+
+```{r}
+median(table(df_aberrant_select$sujet))
+```
+
+
+## Vérifier s'il existe une différence entre bonne et mauvaise réponse 
+
+### Importation dataframe
+```{r}
+df_difference <- read.csv("../data/data_assis_categorisation.csv", sep = ";")
+```
+
+### Exclusion s43 and s44
+```{r}
+df_difference <- df_difference %>% filter(!(sujet == "s44"|sujet == "s43"))
+```
+
+### Calcul du biais et du nombre de bonnes réponses
+```{r, warning = FALSE}
+df_difference <- df_difference %>%
+  mutate(
+    correct_response = df_difference$rep_emotion == tolower(df_difference$emotion_attendue),
+    correct_response = as.character(correct_response),
+    correct_response = ifelse(correct_response == "TRUE", "correct", "incorrect"),
+    correct_response = as.factor(correct_response)
+)
+```
+
+### Regrouper les données et les changer de long à large pour avoir le nombre de bonnes réponses 
+
+Nous commencons par réaliser le tableau wide avec la moyenne pour le biais, puis la somme de bonnes réponses.
+
+#### Long à court pour le biais
+```{r}
+df_difference_wide_bias  <- pivot_wider(
+  data = df_difference, 
+  id_cols= sujet, 
+  names_from = c(bloc, emotion_attendue), 
+  values_from = biais,
+  values_fn = list,
+  names_sep = "_"
+)
+```
+
+```{r}
+for(i in 2:ncol(df_difference_wide_bias)){
+  for (z in 1:nrow(df_difference_wide_bias)){
+    df_difference_wide_bias[[z, i]][[1]] <- mean(df_difference_wide_bias[[z,i]][[1]])
+  }
+}
+```
+
+#### Long à court pour le biais le nombre de bonnes réponses
+```{r}
+df_difference_wide_responses  <- pivot_wider(
+  data = df_difference[df_difference$correct_response == "correct",], 
+  id_cols= sujet, 
+  names_from = c(bloc, emotion_attendue), 
+  values_from = biais, 
+  names_sep = "_",
+  values_fn = list
+)
+```
+
+```{r}
+df_len_nb_BR <- data.frame(matrix(ncol = 7, nrow = 97))
+colnames(df_len_nb_BR) <- paste(colnames(df_difference_wide_responses), "correct", sep = "_")
+colnames(df_len_nb_BR)[1] <- "sujet"
+df_len_nb_BR[,1] <- df_difference_wide_responses[,1]
+for(i in 2:ncol(df_difference_wide_responses)){
+  for (z in 1:nrow(df_difference_wide_responses)){
+    df_len_nb_BR[[z, i]][[1]] <- length(df_difference_wide_responses[[z,i]][[1]])
+  }
+}
+```
+
+```{r}
+df_difference_wide_BR <- merge(df_difference_wide_bias, df_len_nb_BR, by = "sujet")
+```
+
+
+### Test si le biais varie en fonction du nombre de BR
+
+#### Mot-Joie
+```{r}
+mod_t_test_control_mots_J <- lm(as.numeric(mots_J)~mots_J_correct, data = df_difference_wide_BR)
+summary(mod_t_test_control_mots_J)
+cooks_control_bias_mots_J <- df_difference_wide_BR[cooks.distance(mod_t_test_control_mots_J)>4/length(df_difference_wide_BR$sujet),]
+less_than_10_responses_mots_J <- df_difference_wide_BR[df_difference_wide_BR$mots_J_correct<10,]
+gvlma(mod_t_test_control_mots_J)
+```
+Malgré des résultats significatif, une investigation des distance de cook montrent que les personnes ayant moins de 10 réponses ont une grande influence sur la régression. Néanmoins, les enlever réduirait la variance du nombre de bonnes réponse à 0. Ainsi, nous pouvons considérer qu'il n'y a pas d'effet du nombre de bonnes sur le biais dans la condition joie-mots. 
+
+#### Visage-Joyeux
+```{r}
+mod_t_test_control_visages_J <- lm(as.numeric(visages_J)~visages_J_correct, data = df_difference_wide_BR)
+gvlma(mod_t_test_control_visages_J)
+summary(mod_t_test_control_visages_J)
+```
+
+#### Mot-Colère
+```{r}
+mod_t_test_control_mots_C <- lm(as.numeric(mots_C)~mots_C_correct, data = df_difference_wide_BR)
+gvlma(mod_t_test_control_mots_C)
+summary(mod_t_test_control_mots_C)
+```
+
+#### Visage-Colère
+```{r}
+mod_t_test_control_visages_C <- lm(as.numeric(visages_C)~visages_C_correct, data = df_difference_wide_BR)
+gvlma(mod_t_test_control_visages_C)
+summary(mod_t_test_control_visages_C)
+```
+
+#### Mots-Dégout
+```{r}
+mod_t_test_control_mots_D <- lm(as.numeric(mots_D)~mots_D_correct, data = df_difference_wide_BR)
+gvlma(mod_t_test_control_mots_D)
+summary(mod_t_test_control_mots_D)
+```
+
+#### Visages-Dégout
+```{r}
+mod_t_test_control_visages_D <- lm(as.numeric(visages_D)~visages_D_correct, data = df_difference_wide_BR)
+gvlma(mod_t_test_control_visages_D)
+summary(mod_t_test_control_visages_D)
+```
+
+
+
+--- 
+
+---
+
+
+## Vérifier s'il est possible d'ajuster
+
+### Importation du dataframe
+```{r}
+filepath_chunk = "../data/data_analyse_assis_chunk.csv"
+pre_df_chunk <- read.csv(filepath_chunk, sep = ";")
+```
+
+### Exclure s43 et s44
+```{r}
+pre_df_chunk <- pre_df_chunk %>% filter(!(sujet == "s44"|sujet == "s43"))
+```
+
+### Pivoter le dataframe de large à long
+```{r}
+df_chunk <- pre_df_chunk %>% pivot_longer(
+  cols = starts_with("chunk_"), 
+  values_to = "bias", 
+  names_to = "chunk", 
+  names_prefix = "chunk_"
+)
+```
+
+### Exporter pour analyser les outliers
+```{r}
+write.csv(df_chunk, "../data/data_analyse_outlier_chunk.csv")
+```
+
+### Vérification normalité
+```{r}
+qqPlot(df_chunk$bias)
+```
+
+```{r}
+shapiro.test(df_chunk$bias)
+```
+
+
+
+### ANOVA
+```{r}
+library(rstatix)
+res.aov <- anova_test(data= df_chunk, dv = bias, within = chunk, wid = sujet)
+get_anova_table(res.aov)
+res.aov
+```
+
+
+
+# Analyse
+
+## H1
+
+### Transformer le df dans le bon format (large)
+```{r}
+# Petite astuce pour avoir un wide alors que une seule colonne voulu
+df_difference$a <-"biais"
+#### Wide for bias
+df_different_from0  <- pivot_wider(
+  data = df_difference, 
+  id_cols= sujet, 
+  names_from = a,
+  values_from = biais,
+  values_fn = list,
+  names_sep = "_"
+)
+```
+
+```{r}
+for(i in 2:ncol(df_different_from0)){
+  for (z in 1:nrow(df_different_from0)){
+    df_different_from0[[z, i]][[1]] <- mean(df_different_from0[[z,i]][[1]])
+  }
+}
+df_different_from0$biais <- as.numeric(df_different_from0$biais)
+```
+
+### Desribe
+```{r}
+describe(df_different_from0$biais)
+```
+
+### t-test
+```{r}
+mod_H1 <- lm(biais~1, data = df_different_from0)
+summary(mod_H1)
+```
+
+
+
+## H2-H3
+
+### Test du contrebalancement
+```{r}
+df <- separate(
+    data = df_difference,
+    col = ordre,
+    into = c("type", "reglette"),
+    sep = "T"
+)
+df$reglette <- paste("t", df$reglette, sep = "")
+df$biais_ajuste <- stringr::str_replace(df$biais_ajuste, ",", ".")
+df$biais_ajuste <- as.numeric(df$biais_ajuste)
+```
+
+
+### Definition of LMM
+```{r}
+mod_H2_c1 <- lmer(biais_ajuste~bloc*emotion_attendue*reglette + (1+bloc|sujet), data = df)
+mod_H2_c2 <- lmer(biais_ajuste~bloc*emotion_attendue*type + (1+bloc|sujet), data = df)
+mod_H2 <- lmer(biais_ajuste~bloc*emotion_attendue + (1+bloc|sujet), data = df)
+```
+
+```{r}
+anova(mod_H2_c1)
+```
+
+```{r}
+anova(mod_H2_c2)
+```
+
+```{r}
+anova(mod_H2)
+```
+Pas d'effet d'interaction, on peut le retirer du modèle.
+
+### Création du modèle finale
+
+#### Calcul
+```{r}
+df$emotion_attendue <- relevel(as.factor(df$emotion_attendue), ref = "J")
+mod_H2_no_inte <- lmer(biais_ajuste~bloc+emotion_attendue + (1+bloc|sujet), data = df)
+```
+
+#### Test pour voir si rajouter une variation de la pente ca explique mieux
+```{r}
+mod_H2_no_inte_test <- lmer(biais_ajuste~bloc+emotion_attendue + (1|sujet), data = df)
+```
+
+```{r}
+model_performance(mod_H2_no_inte)
+model_performance(mod_H2_no_inte_test)
+```
+Avec variation de la pente --> meilleur AIC que sans la variation de pente
+
+
+#### Test pour voir si un modèle non mixte est meilleur
+```{r}
+mod_H2_no_inte_non_mixte <- lm(biais_ajuste~bloc+emotion_attendue, data = df)
+model_performance(mod_H2_no_inte_non_mixte)
+model_performance(mod_H2_no_inte)
+```
+
+
+
+### Résultats
+```{r}
+anova(mod_H2_no_inte)
+```
+```{r}
+summary(mod_H2_no_inte)
+```
+```{r}
+confint(mod_H2_no_inte)
+```
+### Pour obtenir C-D
+```{r}
+df$emotion_attendue <- relevel(as.factor(df$emotion_attendue), ref = "C")
+mod_H2_no_inteC <- lmer(biais_ajuste~bloc+emotion_attendue + (1+bloc|sujet), data = df)
+summary(mod_H2_no_inteC)
+```
+
+```{r}
+confint(mod_H2_no_inteC)
+```
+### Pourcentage de variance expliquée
+```{r}
+r2(mod_H2_no_inte)
+```
+### Obtenir la moyenne
+```{r}
+describeBy(biais_ajuste~emotion_attendue, data = df)
+``` 
+
+### Graphique
+```{r}
+df$emotion_attendue <- fct_relevel(df$emotion_attendue, c("C", "D", "J"))
+mod_H2_graph <-  lmer(biais_ajuste~bloc*emotion_attendue + (1+bloc|sujet), data = df)
+graph_data_assis <-ggpredict(mod_H2_graph, terms = c("bloc","emotion_attendue"))
+levels(graph_data_assis$group) <- c(
+  "Colère",
+  "Dégout",
+  "Joie"
+)
+```
+
+```{r}
+library(extrafont)
+windowsFonts(A = windowsFont("Times New Roman"))  # Specify font
+test <- read.csv("../data/data_graph.csv", sep = ";")
+```
+
+```{r}
+test %>% ggplot(aes(x = x, y = predicted, group = group, color = group))+
+  facet_grid(.~sample)+
+  geom_pointrange(aes(ymin = conf.low, ymax = conf.high), position = position_dodge(0.3))+
+  scale_colour_manual(values = c("#E09132", "#90a955", "#125F99"))+
+  theme_minimal()+
+  theme(
+    text = element_text(family = "Times New Roman", size = 12),
+    axis.text.x = element_text(size = 11),
+    legend.text = element_text(size = 11))+
+    labs(
+    x = "\nType de stimulus",
+    y = "Biais ajusté (px)",
+    colour = "Émotions"
+)+ scale_fill_discrete(name = "Type", labels = c("Colère", "Dégout", "Joie"))
+```
+
+## H4
+
+### Importation des données
+```{r}
+df_personnalite <- read.csv("../data/data_assis_personnalite.csv", sep = ";")
+df_personnalite <- df_personnalite %>% filter(!(Participant_number == "s43"|Participant_number == "s44"))
+```
+
+
+### Création du modèle
+```{r}
+mod_H4 <- lm(biais_naturel~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data = df_personnalite)
+gvlma(mod_H4)
+car::vif(mod_H4)
+summary(mod_H4)
+```
+
+
+
+```{r}
+mod_H4 <- lm(biais_naturel~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data = df_personnalite)
+gvlma(mod_H4)
+car::vif(mod_H4)
+summary(mod_H4)
+```
+## H5
+
+### Visages-Joie
+```{r}
+mod_H5_visages_J <- lm(VJ_mean_adjustedbias_expectedresponse~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data= df_personnalite)
+summary(mod_H5_visages_J)
+```
+
+### Mots-Joie
+```{r}
+mod_H5_mots_J <- lm(MJ_mean_adjustedbias_expectedresponse~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data= df_personnalite)
+summary(mod_H5_mots_J)
+```
+
+
+### Visages-Colère
+```{r}
+mod_H5_visages_C <- lm(VC_mean_adjustedbias_expectedresponse~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data= df_personnalite)
+summary(mod_H5_visages_C)
+```
+### Mots-Colère
+```{r}
+mod_H5_mots_C <- lm(MC_mean_adjustedbias_expectedresponse~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data= df_personnalite)
+summary(mod_H5_mots_C)
+```
+
+### Visages-Dégout
+```{r}
+mod_H5_visages_D <- lm(VD_mean_adjustedbias_expectedresponse~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data= df_personnalite)
+summary(mod_H5_visages_D)
+```
+
+### Mots-Dégout
+```{r}
+mod_H5_mots_D <- lm(MD_mean_adjustedbias_expectedresponse~E+A+C+N+O+BIS+BAS_Drive+BAS_Reward_Responsiveness+BAS_Fun_Seeking, data= df_personnalite)
+summary(mod_H5_mots_D)
+```
+
+# Analyse Supplémentaires
+```{r}
+angry_anxiety <- lm(VC_mean_adjustedbias_expectedresponse~Anxiety, data = df_personnalite)
+summary(angry_anxiety)
+```
+
+```{r}
+angry_anxiety_MC <- lm(MC_mean_adjustedbias_expectedresponse~Anxiety, data = df_personnalite)
+summary(angry_anxiety_MC)
+```
+
